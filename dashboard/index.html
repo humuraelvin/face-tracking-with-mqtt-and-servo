@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Tracking Dashboard — elvin01</title>
+    <style>
+        /* ─── Reset & Base ──────────────────────────────────────── */
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* ─── Header ────────────────────────────────────────────── */
+        header {
+            width: 100%;
+            background: linear-gradient(135deg, #161b22 0%, #1a2233 100%);
+            border-bottom: 1px solid #30363d;
+            padding: 18px 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        header h1 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: #58a6ff;
+        }
+
+        .conn-badge {
+            padding: 5px 14px;
+            border-radius: 20px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+        }
+
+        .conn-badge.connected {
+            background: #1b4332;
+            color: #40c057;
+        }
+
+        .conn-badge.disconnected {
+            background: #3d1f1f;
+            color: #f87171;
+        }
+
+        .conn-badge.connecting {
+            background: #3d3520;
+            color: #fbbf24;
+        }
+
+        /* ─── Main Grid ─────────────────────────────────────────── */
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            width: 100%;
+            max-width: 800px;
+            padding: 24px;
+        }
+
+        /* ─── Card ──────────────────────────────────────────────── */
+        .card {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 20px 24px;
+        }
+
+        .card h2 {
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #8b949e;
+            margin-bottom: 10px;
+        }
+
+        .card .value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        /* ─── Status-specific colors ────────────────────────────── */
+        .status-MOVE_LEFT {
+            color: #f9826c;
+        }
+
+        .status-MOVE_RIGHT {
+            color: #79c0ff;
+        }
+
+        .status-CENTERED {
+            color: #56d364;
+        }
+
+        .status-NO_FACE {
+            color: #8b949e;
+        }
+
+        /* ─── Servo Visualization ───────────────────────────────── */
+        .servo-vis {
+            grid-column: 1 / -1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 28px;
+        }
+
+        .servo-vis .arrow-bar {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-top: 12px;
+        }
+
+        .arrow {
+            font-size: 2.4rem;
+            transition: opacity 0.2s, transform 0.2s;
+            opacity: 0.2;
+        }
+
+        .arrow.active {
+            opacity: 1;
+            transform: scale(1.15);
+        }
+
+        .face-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: #30363d;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            transition: box-shadow 0.3s;
+        }
+
+        .face-icon.locked {
+            box-shadow: 0 0 0 3px #56d364, 0 0 16px rgba(86, 211, 100, 0.25);
+        }
+
+        /* ─── Log ───────────────────────────────────────────────── */
+        .log-card {
+            grid-column: 1 / -1;
+        }
+
+        #log {
+            height: 160px;
+            overflow-y: auto;
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 0.78rem;
+            background: #0d1117;
+            border: 1px solid #21262d;
+            border-radius: 8px;
+            padding: 10px;
+            color: #8b949e;
+        }
+
+        #log .entry {
+            margin-bottom: 2px;
+        }
+
+        #log .entry .ts {
+            color: #484f58;
+            margin-right: 8px;
+        }
+
+        /* ─── Footer ────────────────────────────────────────────── */
+        footer {
+            padding: 16px;
+            font-size: 0.72rem;
+            color: #484f58;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Header -->
+    <header>
+        <h1>🎯 Face Tracking Dashboard</h1>
+        <span id="connBadge" class="conn-badge connecting">Connecting…</span>
+    </header>
+
+    <!-- Cards Grid -->
+    <div class="grid">
+
+        <!-- Movement Status -->
+        <div class="card">
+            <h2>Movement</h2>
+            <div id="statusValue" class="value status-NO_FACE">—</div>
+        </div>
+
+        <!-- Confidence -->
+        <div class="card">
+            <h2>Confidence</h2>
+            <div id="confValue" class="value">—</div>
+        </div>
+
+        <!-- Servo Direction Visualization -->
+        <div class="card servo-vis">
+            <h2>Servo Direction</h2>
+            <div class="arrow-bar">
+                <span id="arrowLeft" class="arrow">◀</span>
+                <div id="faceIcon" class="face-icon">👤</div>
+                <span id="arrowRight" class="arrow">▶</span>
+            </div>
+        </div>
+
+        <!-- Timestamp -->
+        <div class="card">
+            <h2>Last Update</h2>
+            <div id="tsValue" class="value" style="font-size:1.1rem;">—</div>
+        </div>
+
+        <!-- Messages received -->
+        <div class="card">
+            <h2>Messages</h2>
+            <div id="msgCount" class="value">0</div>
+        </div>
+
+        <!-- Log -->
+        <div class="card log-card">
+            <h2>Event Log</h2>
+            <div id="log"></div>
+        </div>
+    </div>
+
+    <footer>Team elvin01 · Phase 1 · WebSocket ws://127.0.0.1:9002</footer>
+
+    <script>
+        // ─── Configuration ─────────────────────────────────────────
+        const WS_URL = "ws://127.0.0.1:9002";
+        const MAX_LOG = 80;
+
+        // ─── DOM refs ──────────────────────────────────────────────
+        const $badge = document.getElementById("connBadge");
+        const $status = document.getElementById("statusValue");
+        const $conf = document.getElementById("confValue");
+        const $ts = document.getElementById("tsValue");
+        const $count = document.getElementById("msgCount");
+        const $log = document.getElementById("log");
+        const $arrowL = document.getElementById("arrowLeft");
+        const $arrowR = document.getElementById("arrowRight");
+        const $face = document.getElementById("faceIcon");
+
+        let messageCount = 0;
+        let ws = null;
+
+        // ─── WebSocket Logic ───────────────────────────────────────
+        function connect() {
+            $badge.className = "conn-badge connecting";
+            $badge.textContent = "Connecting…";
+
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                $badge.className = "conn-badge connected";
+                $badge.textContent = "Connected";
+                addLog("WebSocket connected to " + WS_URL);
+            };
+
+            ws.onmessage = (evt) => {
+                try {
+                    const data = JSON.parse(evt.data);
+                    handleMessage(data);
+                } catch (e) {
+                    addLog("Bad message: " + evt.data);
+                }
+            };
+
+            ws.onclose = () => {
+                $badge.className = "conn-badge disconnected";
+                $badge.textContent = "Disconnected";
+                addLog("Connection lost — reconnecting in 3s…");
+                setTimeout(connect, 3000);
+            };
+
+            ws.onerror = () => {
+                addLog("WebSocket error");
+            };
+        }
+
+        // ─── Handle Incoming Message ───────────────────────────────
+        function handleMessage(data) {
+            messageCount++;
+            const status = data.status || "UNKNOWN";
+            const confidence = data.confidence || 0;
+            const timestamp = data.timestamp || 0;
+
+            // Update status display
+            $status.textContent = status;
+            $status.className = "value status-" + status;
+
+            // Update confidence
+            $conf.textContent = (confidence * 100).toFixed(1) + "%";
+
+            // Update timestamp
+            if (timestamp > 0) {
+                const d = new Date(timestamp * 1000);
+                $ts.textContent = d.toLocaleTimeString();
+            }
+
+            // Update count
+            $count.textContent = messageCount;
+
+            // Update arrows
+            $arrowL.classList.toggle("active", status === "MOVE_LEFT");
+            $arrowR.classList.toggle("active", status === "MOVE_RIGHT");
+            $face.classList.toggle("locked", status !== "NO_FACE");
+
+            // Log
+            addLog(status + "  conf=" + confidence.toFixed(2));
+        }
+
+        // ─── Log Helper ────────────────────────────────────────────
+        function addLog(text) {
+            const now = new Date().toLocaleTimeString();
+            const entry = document.createElement("div");
+            entry.className = "entry";
+            entry.innerHTML = '<span class="ts">' + now + '</span>' + text;
+            $log.prepend(entry);
+            // Trim old entries
+            while ($log.children.length > MAX_LOG) {
+                $log.removeChild($log.lastChild);
+            }
+        }
+
+        // ─── Start ─────────────────────────────────────────────────
+        connect();
+    </script>
+</body>
+
+</html>

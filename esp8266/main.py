@@ -5,12 +5,12 @@ main.py — ESP8266 Face-Tracking Servo Controller (MicroPython)
 Subscribes to MQTT topic  vision/elvin01/movement  and drives a
 servo motor based on face movement commands:
 
-    MOVE_LEFT   → decrement servo angle (pan left)
-    MOVE_RIGHT  → increment servo angle (pan right)
-    CENTERED    → move to neutral (90°)
-    NO_FACE     → hold current position (do nothing)
+    MOVE_LEFT   → proportional pan left  (bigger offset = faster move)
+    MOVE_RIGHT  → proportional pan right (bigger offset = faster move)
+    CENTERED    → hold current position (face is centered)
+    NO_FACE     → slow sweep/scan to search for face
 
-Servo is driven via PWM on a single GPIO pin (default GPIO2 / D4).
+Servo is driven via PWM on a single GPIO pin (default GPIO14 / D5).
 
 Architecture rule:
     ✅ MQTT only
@@ -31,10 +31,13 @@ from config import (
     SERVO_MIN_ANGLE,
     SERVO_MAX_ANGLE,
     SERVO_CENTER,
-    SERVO_STEP,
+    SERVO_STEP_MIN,
+    SERVO_STEP_MAX,
     SERVO_FREQ,
     DUTY_MIN,
     DUTY_MAX,
+    SCAN_STEP,
+    SCAN_DELAY_MS,
 )
 
 
@@ -53,7 +56,6 @@ class Servo:
     def angle_to_duty(self, angle):
         """Convert angle (0-180) to PWM duty value."""
         angle = max(SERVO_MIN_ANGLE, min(SERVO_MAX_ANGLE, angle))
-        # Linear interpolation
         duty = self.duty_min + (self.duty_max - self.duty_min) * angle / 180
         return int(duty)
 
@@ -66,13 +68,19 @@ class Servo:
     def get_angle(self):
         return self._angle
 
-    def step_left(self, step=SERVO_STEP):
-        """Decrement angle (pan left)."""
-        self.set_angle(self._angle - step)
+    def move_proportional(self, direction, offset_abs):
+        """Move by a proportional step based on offset magnitude.
 
-    def step_right(self, step=SERVO_STEP):
-        """Increment angle (pan right)."""
-        self.set_angle(self._angle + step)
+        Args:
+            direction: -1 for left, +1 for right
+            offset_abs: absolute offset (0.0 to 0.5)
+        """
+        # Map offset (0.0-0.5) to step (STEP_MIN to STEP_MAX)
+        t = min(offset_abs / 0.4, 1.0)  # normalize to 0-1
+        step = SERVO_STEP_MIN + (SERVO_STEP_MAX - SERVO_STEP_MIN) * t
+        step = int(step)
+        new_angle = self._angle + direction * step
+        self.set_angle(new_angle)
 
     def center(self):
         """Move to neutral / center position."""
@@ -81,6 +89,45 @@ class Servo:
     def stop(self):
         """Stop PWM signal (release servo)."""
         self.pwm.duty(0)
+
+
+# ─── Scanner (NO_FACE sweeping) ────────────────────────────────────
+
+class Scanner:
+    """Sweeps servo left and right when no face is detected."""
+
+    def __init__(self):
+        self._direction = 1  # +1 = sweeping right, -1 = sweeping left
+        self._last_tick = 0
+        self._active = False
+
+    def start(self, servo):
+        """Begin scanning from current position."""
+        if not self._active:
+            self._active = True
+            self._last_tick = time.ticks_ms()
+
+    def stop(self):
+        """Stop scanning."""
+        self._active = False
+
+    def tick(self, servo):
+        """Called from main loop. Moves servo one scan step if enough time passed."""
+        if not self._active:
+            return
+        now = time.ticks_ms()
+        if time.ticks_diff(now, self._last_tick) < SCAN_DELAY_MS:
+            return
+        self._last_tick = now
+
+        angle = servo.get_angle()
+        # Reverse at limits
+        if angle >= SERVO_MAX_ANGLE - SCAN_STEP:
+            self._direction = -1
+        elif angle <= SERVO_MIN_ANGLE + SCAN_STEP:
+            self._direction = 1
+
+        servo.set_angle(angle + self._direction * SCAN_STEP)
 
 
 # ─── MQTT Message Handler ──────────────────────────────────────────
@@ -92,6 +139,8 @@ servo = Servo(
     duty_max=DUTY_MAX,
 )
 
+scanner = Scanner()
+
 # Start at center
 servo.center()
 print("[Servo] Initialized at {}°".format(servo.get_angle()))
@@ -102,30 +151,37 @@ def on_message(topic, msg):
     Handle incoming MQTT messages.
 
     Expected payload (JSON):
-        {"status": "MOVE_LEFT", "confidence": 0.87, "timestamp": 1730000000}
+        {"status": "MOVE_LEFT", "confidence": 0.87, "offset": -0.25,
+         "timestamp": 1730000000}
     """
     try:
         payload = json.loads(msg)
         status = payload.get("status", "")
+        offset = payload.get("offset", 0.0)
     except (ValueError, KeyError):
         print("[MQTT] Bad message:", msg)
         return
 
     if status == "MOVE_LEFT":
-        servo.step_left()
-        print("[Servo] LEFT  -> {}°".format(servo.get_angle()))
+        scanner.stop()
+        offset_abs = abs(offset)
+        servo.move_proportional(-1, offset_abs)
+        print("[Servo] LEFT  -> {}° (off={})".format(servo.get_angle(), offset))
 
     elif status == "MOVE_RIGHT":
-        servo.step_right()
-        print("[Servo] RIGHT -> {}°".format(servo.get_angle()))
+        scanner.stop()
+        offset_abs = abs(offset)
+        servo.move_proportional(1, offset_abs)
+        print("[Servo] RIGHT -> {}° (off={})".format(servo.get_angle(), offset))
 
     elif status == "CENTERED":
-        servo.center()
-        print("[Servo] CENTER -> {}°".format(servo.get_angle()))
+        scanner.stop()
+        # Hold current position — face is centered, don't move
+        pass
 
     elif status == "NO_FACE":
-        # Hold current position — do nothing
-        pass
+        # Start scanning to find face
+        scanner.start(servo)
 
     else:
         print("[MQTT] Unknown status:", status)
@@ -161,6 +217,7 @@ def run():
         try:
             while True:
                 client.check_msg()
+                scanner.tick(servo)  # scan if NO_FACE active
                 time.sleep_ms(50)
         except KeyboardInterrupt:
             print("\n[Main] Stopped by user")

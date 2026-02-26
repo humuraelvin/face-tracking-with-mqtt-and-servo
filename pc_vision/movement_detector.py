@@ -8,14 +8,15 @@ Movement states:
     CENTERED    – face is roughly centred
     NO_FACE     – no face detected / lock lost
 
-Only reports state CHANGES to avoid flooding the MQTT broker.
+Includes hysteresis to prevent rapid toggling at the dead-zone boundary,
+and sends a proportional offset so the ESP can make proportional moves.
 """
 
 from __future__ import annotations
 import time
 from typing import Dict, Optional, Tuple
 
-from .config import DEAD_ZONE_RATIO, MIN_PUBLISH_INTERVAL
+from .config import DEAD_ZONE_RATIO, HYSTERESIS_RATIO, MIN_PUBLISH_INTERVAL
 
 
 # Movement states (matches spec)
@@ -28,13 +29,18 @@ NO_FACE = "NO_FACE"
 class MovementDetector:
     """Converts face-lock frame results into discrete movement commands."""
 
-    def __init__(self, dead_zone_ratio: float = DEAD_ZONE_RATIO):
+    def __init__(self, dead_zone_ratio: float = DEAD_ZONE_RATIO,
+                 hysteresis_ratio: float = HYSTERESIS_RATIO):
         """
         Args:
             dead_zone_ratio: fraction of frame width (each side of center)
                              within which the face is considered CENTERED.
+            hysteresis_ratio: extra band outside dead zone – once CENTERED,
+                              the face must exceed dead_zone + hysteresis
+                              before switching to MOVE_LEFT/RIGHT.
         """
         self.dead_zone_ratio = float(dead_zone_ratio)
+        self.hysteresis_ratio = float(hysteresis_ratio)
         self._prev_state: Optional[str] = None
         self._last_publish_time: float = 0.0
 
@@ -46,14 +52,11 @@ class MovementDetector:
         """
         Analyse a single frame result from FaceLockSystem.process_frame().
 
-        Args:
-            frame_result: dict returned by FaceLockSystem.process_frame()
-            frame_width:  width of the camera frame in pixels
-
         Returns:
             A dict ready for MQTT publishing if the state changed (or
             MIN_PUBLISH_INTERVAL elapsed), otherwise None (skip publish).
-            Format: {"status": "...", "confidence": 0.87, "timestamp": 1730...}
+            Format: {"status": "...", "confidence": 0.87, "offset": 0.25,
+                     "timestamp": 1730...}
         """
         now = time.time()
         state = frame_result.get("state", "searching")
@@ -61,6 +64,8 @@ class MovementDetector:
         confidence = frame_result.get("lock_confidence", 0.0)
 
         # ── Determine movement status ───────────────────────────────
+        offset = 0.0  # proportional offset (-0.5 to +0.5)
+
         if state == "searching" or face_box is None:
             movement = NO_FACE
             confidence = 0.0
@@ -69,10 +74,19 @@ class MovementDetector:
             face_cx = (x1 + x2) / 2.0
             frame_cx = frame_width / 2.0
 
-            # Offset as fraction of frame width
+            # Offset as fraction of frame width (-0.5 = far left, +0.5 = far right)
             offset = (face_cx - frame_cx) / frame_width
 
-            if abs(offset) <= self.dead_zone_ratio:
+            # ── Hysteresis logic ────────────────────────────────────
+            # If currently CENTERED, require exceeding dead_zone + hysteresis
+            # to switch to MOVE. Otherwise, just use dead_zone to return
+            # to CENTERED.
+            if self._prev_state == CENTERED:
+                threshold = self.dead_zone_ratio + self.hysteresis_ratio
+            else:
+                threshold = self.dead_zone_ratio
+
+            if abs(offset) <= threshold:
                 movement = CENTERED
             elif offset < 0:
                 movement = MOVE_LEFT
@@ -92,5 +106,6 @@ class MovementDetector:
         return {
             "status": movement,
             "confidence": round(float(confidence), 3),
+            "offset": round(float(offset), 4),
             "timestamp": int(now),
         }

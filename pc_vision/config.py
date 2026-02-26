@@ -18,12 +18,16 @@ MQTT_TOPIC_HEARTBEAT = f"vision/{TEAM_ID}/heartbeat"
 # Face position thresholds relative to frame center.
 # If the face center is within ±DEAD_ZONE_RATIO of frame center → CENTERED.
 # Outside that → MOVE_LEFT or MOVE_RIGHT.
-DEAD_ZONE_RATIO = 0.12  # 12% of frame width on each side of center
+DEAD_ZONE_RATIO = 0.18  # 18% of frame width on each side of center
+
+# Hysteresis: once CENTERED, face must exceed DEAD_ZONE + HYSTERESIS to
+# trigger MOVE again.  Prevents rapid toggling at the boundary.
+HYSTERESIS_RATIO = 0.06  # extra 6% band outside dead zone
 
 # ─── Anti-Flooding ──────────────────────────────────────────────────
 # Only publish when state CHANGES, but also re-publish the current
 # state at most once every MIN_PUBLISH_INTERVAL seconds (heartbeat).
-MIN_PUBLISH_INTERVAL = 0.5  # seconds between forced re-publishes
+MIN_PUBLISH_INTERVAL = 0.15  # seconds between forced re-publishes
 
 # ─── Camera ─────────────────────────────────────────────────────────
-CAMERA_INDEX = 0  # OpenCV VideoCapture index (change if needed)
+CAMERA_INDEX = 2  # OpenCV VideoCapture index (change if needed)

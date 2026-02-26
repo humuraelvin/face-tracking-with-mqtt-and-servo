@@ -172,7 +172,8 @@ At the `>>>` prompt, first connect to WiFi (type each line, press Enter):
 import network
 wlan = network.WLAN(network.STA_IF)
 wlan.active(True)
-wlan.connect('YOUR_WIFI_SSID', 'YOUR_WIFI_PASSWORD')
+wlan.connect('London is Red', 'london123@')
+
 ```
 
 Wait 5 seconds, then check:
